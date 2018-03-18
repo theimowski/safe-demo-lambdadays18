@@ -30,15 +30,16 @@ type Model =
     Name    : string
     Score   : Score option
     Loading : bool
-    Results : VotingResults option }
+    Results : VotingResults option
+    Error   : string option }
 
 type Msg =
 | SetComment of string
 | SetName    of string
 | SetScore   of Score
 | Submit
+| SeeResults
 | GotResults of Result<VotingResults, exn>
-
 
 module Server = 
 
@@ -56,38 +57,60 @@ let init () =
       Name    = ""
       Score   = None
       Loading = false
-      Results = None }
+      Results = None
+      Error   = None }
   let cmd =
     Cmd.none
   model, cmd
 
-let mkVote (model : Model) : Vote =
-  { Comment = model.Comment
-    Name    = model.Name
-    Score   = defaultArg model.Score Good }
+let mkVote (model : Model) : Result<Vote, string> =
+  match model.Score with
+  | None -> Error "You must select score"
+  | Some score ->
+    let v =
+      { Comment = model.Comment
+        Name    = model.Name
+        Score   = score }
+    match Vote.validate v with
+    | Ok v -> Ok v
+    | Error CommentEmpty -> Error "Comment cannot be empty"
+    | Error NameEmpty    -> Error "Name cannot be empty"
 
 let update msg (model : Model) =
-  let model' =
-    match msg with
-    | SetComment comment -> { model with Comment = comment }
-    | SetName    name    -> { model with Name    = name }
-    | SetScore   score   -> { model with Score   = Some score }
-    | Submit             -> { model with Loading = true }
-    | GotResults (Ok r)  -> { model with Loading = false
-                                         Results = Some r }
-    | GotResults _       -> { model with Loading = false }
-
-  let cmd =
-    match msg with
-    | Submit ->
+  match msg with
+  | SetComment comment -> 
+    { model with Comment = comment }, Cmd.none
+  | SetName    name    -> 
+    { model with Name    = name }, Cmd.none
+  | SetScore   score   -> 
+    { model with Score   = Some score }, Cmd.none
+  | Submit             -> 
+    match mkVote model with
+    | Ok vote ->
+      let cmd =
+        Cmd.ofAsync
+          Server.api.vote
+          vote
+          (Ok >> GotResults)
+          (Error >> GotResults)
+      { model with Loading = true
+                   Error   = None }, cmd
+    | Error e ->
+      { model with Error = Some e }, Cmd.none
+  | SeeResults         -> 
+    let cmd =
       Cmd.ofAsync
-        Server.api.vote
-        (mkVote model')
+        Server.api.getResults
+        ()
         (Ok >> GotResults)
         (Error >> GotResults)
-    | _ -> Cmd.none
-
-  model', cmd
+    { model with Loading = true }, cmd
+  | GotResults (Ok r)  -> 
+    { model with Loading = false
+                 Results = Some r }, Cmd.none
+  | GotResults _ -> 
+    { model with Loading = false
+                 Error   = Some "Failed to fetch results" }, Cmd.none
 
 let show = function
 | Some x -> string x
@@ -168,6 +191,7 @@ let comment (model : Model) dispatch =
   Textarea.textarea
     [ Textarea.Placeholder "Comment"
       Textarea.DefaultValue model.Comment
+      Textarea.Disabled model.Loading
       Textarea.Props [ onChange (SetComment >> dispatch) ] ]
     [ ]
 
@@ -175,6 +199,7 @@ let name (model : Model) dispatch =
   Input.text
     [ Input.Placeholder "Name"
       Input.DefaultValue model.Name
+      Input.Disabled model.Loading
       Input.Props [ onChange (SetName >> dispatch) ] ]
 
 let submit (model : Model) dispatch =
@@ -185,13 +210,26 @@ let submit (model : Model) dispatch =
       Button.IsLoading model.Loading ]
     [ str "Submit" ]
 
+let results (model : Model) dispatch =
+  Button.a
+    [ Button.IsFullwidth
+      Button.Color IsLight
+      Button.OnClick (fun _ -> dispatch SeeResults)
+      Button.IsLoading model.Loading ]
+    [ str "See results" ]
+
+let error (model : Model) =
+  Help.help [ Help.Color IsDanger ]
+    [ str (defaultArg model.Error "") ]
 
 let formBox model dispatch =
   Box.box' [ ]
     [ field (scores  model dispatch)
       field (comment model dispatch)
       field (name    model dispatch)
-      field (submit  model dispatch) ]
+      field (submit  model dispatch)
+      field (results model dispatch)
+      error model ]
 
 let resultsBox (results : VotingResults) =
   let item score =
@@ -213,9 +251,10 @@ let resultsBox (results : VotingResults) =
           item SoSo 
           item Poor ]
       Content.content [ Content.Size IsSmall ]
-        [ ul []
+        [ h3 [] [ str "Comments" ]
+          ol []
             [ for (name,comment) in results.Comments ->
-                li [ ]
+                li [ Style [ TextAlign "left" ] ]
                   [ i [ ] [ str (sprintf "\"%s\"" comment) ]
                     str (sprintf " - %s" name) ] ] ] ]
 
@@ -225,7 +264,7 @@ let containerBox model dispatch =
   | Some results -> resultsBox results
   | None -> formBox model dispatch
 
-let imgSrc = "https://crossweb.pl/upload/gallery/cycles/11255/300x300/lambda_days.png"
+let imgSrc = "https://res.cloudinary.com/skillsmatter/image/upload/c_fill,w_300,h_300,g_north_west/v1519237242/jtvg3oimrx6qdxwofs4a.png"
 
 let view model dispatch =
   Hero.hero [ Hero.Color IsPrimary; Hero.IsFullHeight ] 
@@ -242,12 +281,14 @@ let view model dispatch =
                   Column.Offset (Column.All, Column.Is3) ]
                 [ Level.level []
                     [ Level.item [ ]
-                        [ Image.image [ Image.Is64x64 ]
-                            [ img [ Src imgSrc ] ] ] ]
+                        [ Image.image [ Image.Is128x128 ]
+                            [ img 
+                                [ Src imgSrc
+                                  Style [ Border "2px solid" ] ] ] ] ]
                   h1 [ ClassName "title" ] 
                     [ str "SAFE Demo" ]
                   div [ ClassName "subtitle" ]
-                    [ str "Score my talk @LambdaDays '18" ]
+                    [ str "Score my talk @F# eXchange '18" ]
                   containerBox model dispatch ] ] ] ]
 
   

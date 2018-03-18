@@ -11,6 +11,17 @@ type Vote =
     Name    : string 
     Score   : Score }
 
+type ValidationError =
+| CommentEmpty
+| NameEmpty
+
+module Vote =
+  let validate (v : Vote) : Result<Vote, ValidationError> =
+    match v.Comment, v.Name with
+    | "", _  -> Error CommentEmpty
+    | _ , "" -> Error NameEmpty
+    | _      -> Ok v
+
 type VotingResults =
   { Comments : (string*string) []
     Scores   : Map<Score, int> }
@@ -29,4 +40,5 @@ type ICounterProtocol =
   { getInitCounter : unit -> Async<Counter> }
 
 type IVotingProtocol =
-  { vote : Vote -> Async<VotingResults> }
+  { getResults : unit -> Async<VotingResults>
+    vote : Vote -> Async<VotingResults> }

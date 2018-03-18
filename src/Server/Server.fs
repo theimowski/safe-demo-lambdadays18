@@ -22,7 +22,7 @@ let countVotes () : VotingResults =
   let vs =
     votes
     |> Seq.toArray
-    |> Array.filter (fun v -> v.Name <> "" && v.Comment <> "")
+    |> Array.filter (fun v -> match Vote.validate v with Ok _ -> true | _ -> false)
 
   let comments =
     vs
@@ -43,11 +43,18 @@ let vote (v: Vote) : Async<VotingResults> =
     return countVotes()
   }
 
+let getResults () : Async<VotingResults> =
+  async {
+    do! Async.Sleep 1000
+    return countVotes()
+  }
+
 let getInitCounter () : Async<Counter> = async { return 42 }
 
 let init : WebPart = 
   let votingProcotol = 
-    { vote = vote }
+    { vote = vote
+      getResults = getResults }
   // creates a WebPart for the given implementation
   FableSuaveAdapter.webPartWithBuilderFor votingProcotol Route.builder
 
